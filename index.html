@@ -399,14 +399,20 @@ async function fbDB(){
   try{ fs=F.initializeFirestore(app,{localCache:F.persistentLocalCache({tabManager:F.persistentMultipleTabManager()})}); }
   catch(e){ fs=F.getFirestore(app); }
   let me;
-  return {
+  const check = async () => {
+    me=auth.currentUser; api.uid=me.uid; api.name=me.displayName||''; api.photo=me.photoURL||null;
+    let ok=false;
+    try{ ok=(await F.getDoc(F.doc(fs,'access',me.uid))).exists(); }catch(e){}
+    return {needCode:!ok};
+  };
+  const api = {
     async init(){
       await auth.authStateReady();
-      me = auth.currentUser || (await AU.signInAnonymously(auth)).user;
-      let ok=false;
-      try{ ok=(await F.getDoc(F.doc(fs,'access',me.uid))).exists(); }catch(e){}
-      return {needCode:!ok};
+      if(!auth.currentUser || auth.currentUser.isAnonymous) return {needLogin:true};
+      return check();
     },
+    async login(){ await AU.signInWithPopup(auth, new AU.GoogleAuthProvider()); return check(); },
+    logout(){ return AU.signOut(auth); },
     async join(code){ await F.setDoc(F.doc(fs,'access',me.uid),{code,at:Date.now()}); },
     watch(c,cb){ F.onSnapshot(F.collection(fs,c), s=>cb(s.docs.map(d=>Object.assign({id:d.id},d.data()))), e=>toast('연결 오류: '+e.code)); },
     set(c,id,v){ return F.setDoc(F.doc(fs,c,id),v); },
@@ -420,6 +426,7 @@ async function fbDB(){
       return s.exists()? s.data().d : null;
     }
   };
+  return api;
 }
 
 /* ---------- views ---------- */
@@ -574,7 +581,7 @@ function shSettings(){
   sheet('설정', `<div class="row" style="margin-top:4px;gap:16px">${av(S.me,'xl')}<div class="grow two"><label class="btn g s" style="width:100%;cursor:pointer">사진 변경<input type="file" id="f-ava" accept="image/*" hidden></label>${S.me.photo?'<button class="btn g s" style="width:100%" data-a="ava-del">사진 삭제</button>':''}</div></div>
     <label class="fld"><span>닉네임</span><div class="row"><input class="inp" id="s-name" maxlength="8" value="${esc(S.me.name)}"><button class="btn s" style="height:50px" data-a="name-save">저장</button></div></label>
     ${standalone?'':`<div class="lbl"><span>앱 설치</span></div><div class="card">${deferred?'<button class="btn" data-a="install">홈 화면에 설치</button>':'<div class="in" style="margin-top:0"><i>'+I.plus+'</i><div><b>Android · Chrome</b><span>오른쪽 위 메뉴 &gt; 홈 화면에 추가 (앱 설치)</span></div></div><div class="in"><i>'+I.plus+'</i><div><b>iPhone · Safari</b><span>하단 공유 버튼 &gt; 홈 화면에 추가</span></div></div>'}</div>`}
-    <div class="fld"><div class="two"><button class="btn g" data-a="intro">기능 소개</button><button class="btn g" data-a="switch">프로필 전환</button></div></div>
+    <div class="fld"><div class="two"><button class="btn g" data-a="intro">기능 소개</button><button class="btn g" data-a="switch">${DEMO?'프로필 전환':'로그아웃'}</button></div></div>
     ${DEMO?'<div class="fld"><button class="btn g" data-a="demo-reset">샘플 데이터 초기화</button></div>':''}`);
 }
 function shIntro(){
@@ -597,7 +604,17 @@ function gateCode(){
   S.gate='code';
   $('#app').innerHTML=`<div class="gate"><h1>운동 인증</h1><p>참여 코드를 입력하세요</p><label class="fld"><input class="inp" id="g-code" autocomplete="off" placeholder="참여 코드"></label><div class="fld"><button class="btn" data-a="code-join">입장</button></div></div>`;
 }
+function gateLogin(){
+  S.gate='login';
+  $('#app').innerHTML=`<div class="gate"><h1>운동 인증</h1><p>Google 계정으로 로그인하세요</p><div class="fld"><button class="btn" data-a="login">Google로 로그인</button></div></div>`;
+}
 function gateProfile(){
+  if(DB.uid){
+    if(S.gate==='profile') return; S.gate='profile';
+    const full=S.members.length>=C.maxMembers;
+    $('#app').innerHTML=`<div class="gate"><h1>프로필 만들기</h1><p>${full?'정원이 찼습니다':'사용할 닉네임을 입력하세요'}</p>${full?'':`<label class="fld"><input class="inp" id="g-name" maxlength="8" placeholder="닉네임" value="${esc((DB.name||'').slice(0,8))}"></label><div class="fld"><button class="btn" data-a="member-new">시작</button></div>`}<div class="fld"><button class="btn g" data-a="switch">다른 계정으로 로그인</button></div></div>`;
+    return;
+  }
   const list=`${S.members.map(m=>`<button class="mp" data-a="member-pick:${m.id}">${av(m)}${esc(m.name)}</button>`).join('')}`;
   if(S.gate==='profile' && $('#g-list')){ if(!DEMO) $('#g-list').innerHTML=list; return; }
   S.gate='profile';
@@ -606,7 +623,7 @@ function gateProfile(){
 }
 function onData(){
   if(!['members','posts','comments','excuses','payments'].every(c=>S.loaded[c])) return;
-  const id=LS.get('wc_me'); S.me=S.members.find(m=>m.id===id)||null;
+  const id=DB.uid||LS.get('wc_me'); S.me=S.members.find(m=>m.id===id)||null;
   if(!S.me) return gateProfile();
   S.gate=null; render();
   if(!LS.get('wc_intro')) shIntro();
@@ -672,7 +689,11 @@ const A = {
   'ava-del': guard(async () => { await DB.update('members',S.me.id,{photo:null}); S.me.photo=null; shSettings(); }),
   async install(){ if(!deferred) return; deferred.prompt(); try{ await deferred.userChoice; }catch(e){} deferred=null; closeSheet(); },
   intro(){ shIntro(); },
-  switch(){ closeSheet(); LS.del('wc_me'); S.me=null; S.gate=null; if(DEMO){ DB.reset(); LS.del('wc_intro'); DB=localDB(); S.loaded={}; start(); } else gateProfile(); },
+  switch(){ closeSheet(); LS.del('wc_me'); S.me=null; S.gate=null; if(DEMO){ DB.reset(); LS.del('wc_intro'); DB=localDB(); S.loaded={}; start(); } else { Promise.resolve(DB.logout()).catch(()=>{}).then(()=>location.reload()); } },
+  login: guard(async () => {
+    let r; try{ r=await DB.login(); }catch(e){ console.error(e); return toast(e.code==='auth/unauthorized-domain'?'승인된 도메인에 이 주소를 추가하세요':'로그인하지 못했습니다'); }
+    if(r.needCode) gateCode(); else { $('#app').innerHTML='<div class="spin"></div>'; start(); }
+  }),
   'demo-reset'(){ A.switch(); },
   'code-join': guard(async () => {
     const code=$('#g-code').value.trim(); if(!code) return;
@@ -683,9 +704,9 @@ const A = {
   'member-new': guard(async () => {
     const name=$('#g-name').value.trim(); if(!name) return toast('이름을 입력하세요');
     if(S.members.length>=C.maxMembers) return toast('정원이 찼습니다');
-    const id=uid('m'); LS.set('wc_me',id);
+    const id=DB.uid||uid('m'); LS.set('wc_me',id);
     if(DEMO) await demoMe(id);
-    await DB.set('members',id,{name,color:COLORS[DEMO?0:S.members.length%COLORS.length],createdAt:DEMO?START.getTime():Date.now()});
+    await DB.set('members',id,{name,color:COLORS[DEMO?0:S.members.length%COLORS.length],photo:DB.photo||null,createdAt:DEMO?START.getTime():Date.now()});
   })
 };
 async function demoMe(id){
@@ -743,11 +764,11 @@ document.addEventListener('visibilitychange', () => { if(!document.hidden && S.m
   try{
     DB = DEMO ? localDB() : await fbDB();
     const r=await DB.init();
-    if(r.needCode) gateCode(); else start();
+    if(r.needLogin) gateLogin(); else if(r.needCode) gateCode(); else start();
     if(!DEMO && 'serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(()=>{});
   }catch(e){
     console.error(e);
-    $('#app').innerHTML=`<div class="gate"><h1>연결 실패</h1><p>${esc(e.code||e.message||'')}</p><p>config.js 와 Firebase 설정(Firestore, 익명 로그인)을 확인하세요.</p></div>`;
+    $('#app').innerHTML=`<div class="gate"><h1>연결 실패</h1><p>${esc(e.code||e.message||'')}</p><p>config.js 와 Firebase 설정(Firestore, Google 로그인)을 확인하세요.</p></div>`;
   }
 })();
 })();
