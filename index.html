@@ -39,7 +39,9 @@ svg{display:block}
 .ib{position:relative;width:42px;height:42px;border-radius:50%;background:var(--s2);display:grid;place-items:center;flex:none}
 .ib .dot{position:absolute;top:-2px;right:-2px;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--bl);font-size:11px;font-weight:700;line-height:18px;text-align:center;border:2px solid var(--bg);box-sizing:content-box}
 .av{--c:var(--bl);width:34px;height:34px;border-radius:50%;flex:none;display:grid;place-items:center;font-size:14px;font-weight:700;color:var(--c);background:color-mix(in srgb,var(--c) 14%,#0d1016);box-shadow:inset 0 0 0 1.5px color-mix(in srgb,var(--c) 55%,transparent)}
+.av{overflow:hidden}.av img{width:100%;height:100%;object-fit:cover;border-radius:50%}
 .av.lg{width:42px;height:42px;font-size:16px}
+.av.xl{width:68px;height:68px;font-size:26px}
 .av.sm{width:28px;height:28px;font-size:12px}
 
 /* blocks */
@@ -282,7 +284,7 @@ const weekName = i => i<0 ? '시작 전' : (i<C.prepQuotas.length ? `예비 ${i+
 const S = { me:null, tab:'home', members:[], posts:[], comments:[], excuses:[], payments:[], feedWeek:null, who:'me', seg:'fine', sheet:null, loaded:{}, gate:null };
 let DB;
 const M = id => S.members.find(m=>m.id===id) || {id, name:'?', color:'#566074'};
-const av = (m,c='') => `<span class="av ${c}" style="--c:${m.color}">${esc((m.name||'?').slice(0,1))}</span>`;
+const av = (m,c='') => `<span class="av ${c}" style="--c:${m.color}">${m.photo?`<img src="${m.photo}" alt="">`:esc((m.name||'?').slice(0,1))}</span>`;
 
 function exStatus(e){
   const others=S.members.filter(m=>m.id!==e.memberId), v=e.votes||{};
@@ -569,7 +571,8 @@ window.addEventListener('beforeinstallprompt', e=>{ e.preventDefault(); deferred
 function shSettings(){
   S.sheet={type:'set'};
   const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  sheet('설정', `<label class="fld" style="margin-top:4px"><span>이름</span><div class="row"><input class="inp" id="s-name" maxlength="8" value="${esc(S.me.name)}"><button class="btn s" style="height:50px" data-a="name-save">저장</button></div></label>
+  sheet('설정', `<div class="row" style="margin-top:4px;gap:16px">${av(S.me,'xl')}<div class="grow two"><label class="btn g s" style="width:100%;cursor:pointer">사진 변경<input type="file" id="f-ava" accept="image/*" hidden></label>${S.me.photo?'<button class="btn g s" style="width:100%" data-a="ava-del">사진 삭제</button>':''}</div></div>
+    <label class="fld"><span>닉네임</span><div class="row"><input class="inp" id="s-name" maxlength="8" value="${esc(S.me.name)}"><button class="btn s" style="height:50px" data-a="name-save">저장</button></div></label>
     ${standalone?'':`<div class="lbl"><span>앱 설치</span></div><div class="card">${deferred?'<button class="btn" data-a="install">홈 화면에 설치</button>':'<div class="in" style="margin-top:0"><i>'+I.plus+'</i><div><b>Android · Chrome</b><span>오른쪽 위 메뉴 &gt; 홈 화면에 추가 (앱 설치)</span></div></div><div class="in"><i>'+I.plus+'</i><div><b>iPhone · Safari</b><span>하단 공유 버튼 &gt; 홈 화면에 추가</span></div></div>'}</div>`}
     <div class="fld"><div class="two"><button class="btn g" data-a="intro">기능 소개</button><button class="btn g" data-a="switch">프로필 전환</button></div></div>
     ${DEMO?'<div class="fld"><button class="btn g" data-a="demo-reset">샘플 데이터 초기화</button></div>':''}`);
@@ -665,7 +668,8 @@ const A = {
   bell(){ shNoti(); },
   noti(k){ const n=S.sheet.list[k]; closeSheet(); if(n.post) shPost(n.post); else { S.tab='fine'; S.seg='ex'; render(); } },
   settings(){ shSettings(); },
-  'name-save': guard(async () => { const name=$('#s-name').value.trim(); if(!name) return; await DB.update('members',S.me.id,{name}); closeSheet(); toast('저장했습니다'); }),
+  'name-save': guard(async () => { const name=$('#s-name').value.trim(); if(!name) return; await DB.update('members',S.me.id,{name}); closeSheet(); toast('닉네임을 바꿨습니다'); }),
+  'ava-del': guard(async () => { await DB.update('members',S.me.id,{photo:null}); S.me.photo=null; shSettings(); }),
   async install(){ if(!deferred) return; deferred.prompt(); try{ await deferred.userChoice; }catch(e){} deferred=null; closeSheet(); },
   intro(){ shIntro(); },
   switch(){ closeSheet(); LS.del('wc_me'); S.me=null; S.gate=null; if(DEMO){ DB.reset(); LS.del('wc_intro'); DB=localDB(); S.loaded={}; start(); } else gateProfile(); },
@@ -703,6 +707,23 @@ $('#f-pay').addEventListener('change', guard(async e => {
   await DB.putPhoto('pay_'+payKey,d); PH.set('pay_'+payKey,d);
   await DB.set('payments',payKey,{memberId:S.me.id,amount:item.amount,createdAt:Date.now()});
   toast('납부 인증 완료');
+}));
+function squareThumb(file, n=192){
+  return new Promise((res,rej) => {
+    const url=URL.createObjectURL(file), im=new Image();
+    im.onload = () => { const s=Math.min(im.width,im.height), c=document.createElement('canvas'); c.width=c.height=n;
+      c.getContext('2d').drawImage(im,(im.width-s)/2,(im.height-s)/2,s,s,0,0,n,n); URL.revokeObjectURL(url); res(c.toDataURL('image/jpeg',.82)); };
+    im.onerror = () => { URL.revokeObjectURL(url); rej(new Error('image')); };
+    im.src=url;
+  });
+}
+document.addEventListener('change', guard(async e => {
+  if(e.target.id!=='f-ava') return;
+  const f=e.target.files[0]; if(!f) return;
+  const photo=await squareThumb(f);
+  await DB.update('members',S.me.id,{photo}); S.me.photo=photo;
+  if(S.sheet && S.sheet.type==='set') shSettings();
+  toast('프로필 사진을 바꿨습니다');
 }));
 document.addEventListener('change', async e => {
   if(e.target.id!=='f-post') return;
